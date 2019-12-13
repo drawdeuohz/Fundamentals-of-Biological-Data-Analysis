@@ -1,0 +1,542 @@
+clear all
+set more off
+
+//Edward Zhou 
+//Data Quality Study with Andrea and Prof. Meltzer 
+//Last Edited: 12/5/2019
+
+******
+
+cd "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\Hospitalist Study\Operations\Temp datasets"
+//import excel using "\\bsdshares.uchad.uchospitals.edu\gmed\hosplist\10. Follow-up Calls and Progress Reports\PatientID Table.xlsx", first 
+odbc load, table("v_Patientid_Report") dsn("hospitalistdb.cri.uchicago.edu") lowercase clear 
+
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\Hospitalist Study\Operations\Temp datasets\patientid.dta", replace 
+clear
+
+*Patient Encounter table
+//import excel using "\\bsdshares.uchad.uchospitals.edu\gmed\hosplist\10. Follow-up Calls and Progress Reports\Patient Encounters.xlsx", first
+odbc load, table("v_PatientEncounterReport_2") dsn("hospitalistdb.cri.uchicago.edu") lowercase clear
+
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\Hospitalist Study\Operations\Temp datasets\patient_encounter.dta", replace 
+
+*Merging
+merge 1:1 subjectid using "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\Hospitalist Study\Operations\Temp datasets\patientid.dta"
+keep if site == 1 //232 obs deleted, those obs belong to an obselete site
+drop _merge 
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\Hospitalist Study\Operations\Temp datasets\patientid_ecnt.dta", replace
+
+//Group together consent+readmit consent, etc. 
+use "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\Hospitalist Study\Operations\Temp datasets\patientid_ecnt.dta", replace
+encode study_status, gen(study_status1)
+recode study_status1 (1 6 = 1) (2 3 7 = 2) (9 8 = 9)
+//Not GMED patients wouldn't count 
+//DEAD is effectively DCB4 for our study
+
+drop if study_status1 == 5
+
+//1 patient with missing gender, one with space as gender
+drop if missing(gender)
+drop if gender == " "
+
+gen a=c(current_date)
+gen double today = date(a, "DMY")
+format today %td
+drop a
+
+gen a = 1 //intermediate variable
+gen admitday = dofc(admitdate)
+drop if missing(admitday)
+format %td admitday //create date range variable
+
+//First set(left column) of graphs of total number & % of study_status by week and admission date going back to 2013
+format admitday %tdmd
+
+//study_status by week, reporting in the progress report each week.
+gen admission_date_week = wofd(admitday)
+format admission_date_week %twY!ww
+
+gen lastweek = admission_date_week-1
+bys lastweek: egen new_admissions = total(a)
+
+bys admission_date_week: egen num_total_week = total(a)
+bys admission_date_week: gen num_total_week_per = 1
+
+bys admission_date_week: egen num_enrolled_week = total(a) if study_status1 ==1
+bys admission_date_week: gen num_enrolled_week_per = round(num_enrolled_week*100/num_total_week, .01)
+
+bys admission_date_week: egen num_dcb4_week = total(a) if study_status1 ==2
+bys admission_date_week: gen num_dcb4_week_per = round(num_dcb4_week*100/num_total_week, .01)
+
+bys admission_date_week: egen num_dk_week = total(a) if study_status1 ==4
+bys admission_date_week: gen num_dk_week_per = round(num_dk_week*100/num_total_week, .01)
+
+bys admission_date_week: egen num_refuse_week = total(a) if study_status1 ==9
+bys admission_date_week: gen num_refuse_week_per = round(num_refuse_week*100/num_total_week, .01)
+
+bys admission_date_week: egen num_attempt = total(a) if !missing(consentintime)
+bys admission_date_week: gen num_attempt_per = round(num_attempt*100/num_total_week, .01)
+
+gen attempted_interview = !missing(consentintime)
+gen consented_interview = 1 if study_status1 == 1
+replace consented_interview = 0 if missing(consented_interview)
+//1 is attempted, 0 is not
+
+gen attempted_interview1 = 1 if study_status1 == 1
+replace attempted_interview1 = 1 if study_status1 == 9
+replace attempted_interview1 = 0 if study_status1 == 2
+replace attempted_interview1 = 0 if study_status1 == 4
+
+encode gender, gen(gender1)
+gen ismale_gender_dummy = gender1-1
+
+egen weekly_attempt_rate = max(num_attempt_per), by(admission_date_week) 
+
+rename subjectid subject
+
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Temp Data", replace
+
+cd "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019"
+use "bigLAFNoDuplicates"
+merge 1:1 subject using "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Temp Data", force
+keep if _merge==3
+
+//Only UChicago
+keep if subject_sitecode == 1
+
+drop _merge
+
+//2 patients without a week of admission
+drop if num_total_week == 2
+
+//Drop 28 extreme outliers by age 
+drop if subject_age <15
+drop if subject_age >104
+
+gen attempt_category = ceil(weekly_attempt_rate/10)
+label define attempt_category1 1 "0%-10% attempt rate" 2 "10%-20% attempt rate" 3 "20%-30% attempt rate" 4 "30%-40% attempt rate" 5 "40%-50% attempt rate" 6 "50%-60% attempt rate" 7 "60%-70% attempt rate" 8 "70%-80% attempt rate" 9 "80%-90% attempt rate" 10 "90%-100% attempt rate"
+label values attempt_category attempt_category1
+
+gen rounded_attempt_percentage = round(weekly_attempt_rate)
+gen rounded_attempt_percentage5 = round(weekly_attempt_rate, 5)
+
+drop nvals
+by admission_date_week, sort: gen nvals = _n == 1
+gen attempt_percentage_byweek = rounded_attempt_percentage if nvals == 1
+gen attempt_percentage_byweek5 = rounded_attempt_percentage5 if nvals == 1
+
+gen lastday = dofc(dischargedate)
+replace lastday = today if missing(lastday)
+format %td lastday
+gen staytime = lastday-admitday
+gen last_date_week = wofd(lastday)
+
+//Drop 64; 188 extreme length of stay observations
+drop if staytime <0
+drop if staytime >50
+
+gen geriatric = 1 if subject_age >= 65
+replace geriatric = 0 if subject_age <65
+
+gen years_post_65 = subject_age-65 if subject_age >= 65
+replace years_post_65  = 0 if subject_age <65
+
+gen years_post_avg59 = subject_age-59 if subject_age >= 59
+replace years_post_avg59  = 0 if subject_age <59
+
+gen age_group = round(subject_age, 10)
+gen new_admissions_rounded = round(new_admissions, 50)
+
+bys subject_age: egen interview_per = total(consented_interview)
+bys subject_age: egen interview_per1 = total(a)
+gen interview_per2 = interview_per/interview_per1
+drop interview_per interview_per1
+rename interview_per2 interview_per
+
+bys age_group: egen xinterview_per = total(consented_interview)
+bys age_group: egen xinterview_per1 = total(a)
+gen xinterview_per2 = xinterview_per/xinterview_per1
+drop xinterview_per xinterview_per1
+rename xinterview_per2 xinterview_per
+
+bys subject_age: egen attempted_percent = total(attempted_interview)
+bys subject_age: egen attempt_per1 = total(a)
+gen attempt_per2 = attempted_percent/attempt_per1
+drop attempted_percent attempt_per1
+rename attempt_per2 attempted_percent
+
+bys age_group: egen xattempt_per = total(attempted_interview)
+bys age_group: egen xattempt_per1 = total(a)
+gen xattempt_per2 = xattempt_per/xattempt_per1
+drop xattempt_per xattempt_per1
+rename xattempt_per2 xattempt_per
+
+bys subject_age attempt_category: egen attempt_per_frac = total(attempted_interview)
+bys subject_age attempt_category: egen attempt_per_frac1 = total(a)
+gen attempt_per_frac2 = attempt_per_frac/attempt_per_frac1
+drop attempt_per_frac attempt_per_frac1
+rename attempt_per_frac2 attempt_per_frac
+
+bys subject_age attempt_category: egen interview_per_frac = total(consented_interview)
+bys subject_age attempt_category: egen interview_per_frac1 = total(a)
+gen interview_per_frac2 = interview_per_frac/interview_per_frac1
+drop interview_per_frac interview_per_frac1
+rename interview_per_frac2 interview_per_frac
+
+
+bys age_group attempt_category: egen age_group_attempt_rate1 = total(attempted_interview)
+bys age_group attempt_category: egen age_group_attempt_rate2 = total(a)
+gen age_group_attempt_rate = age_group_attempt_rate1/age_group_attempt_rate2
+
+***
+gen attempt_refuse = 1 if (attempted_interview == 1 & study_status1 == 9)
+replace attempt_refuse = 0 if missing(attempt_refuse)
+//GIVEN attempted
+
+gen attempt_consent = 1 if (attempted_interview == 1 & study_status1 == 1)
+replace attempt_consent = 0 if missing(attempt_consent)
+//GIVEN attempted
+
+gen has_proxy = 1 if (subject_inpProxy == 2 | subject_inpProxy == 3)
+replace has_proxy = 0 if missing(has_proxy)
+
+******* Proxies work
+bys subject_age: egen proxy_perbyage = total(has_proxy)
+bys subject_age: egen proxy_perbyage1 = total(a)
+gen proxy_perbyage2 = proxy_perbyage/proxy_perbyage1
+drop proxy_perbyage proxy_perbyage1
+rename proxy_perbyage2 proxy_perbyage
+bys subject_age: egen countproxy_byage = total(has_proxy)
+
+gen attemptwithproxy = 1 if (has_proxy == 1 & attempted_interview == 1)
+bys subject_age: egen attemptproxy_perbyage = total(attemptwithproxy)
+bys subject_age: egen attemptproxy_perbyage1 = total(attempted_interview == 1)
+gen attemptproxy_perbyage2 = attemptproxy_perbyage/attemptproxy_perbyage1
+drop attemptproxy_perbyage attemptproxy_perbyage1
+rename attemptproxy_perbyage2 attemptproxy_perbyage
+bys subject_age: egen countattemptproxy_byage = total(attemptwithproxy)
+
+bys subject_age: egen xattemptproxy_perbyage = total(attemptwithproxy)
+bys subject_age: egen xattemptproxy_perbyage1 = total(a)
+gen xattemptproxy_perbyage2 = xattemptproxy_perbyage/xattemptproxy_perbyage1
+drop xattemptproxy_perbyage xattemptproxy_perbyage1
+rename xattemptproxy_perbyage2 xattemptproxy_perbyage
+
+
+bys admission_date_week: egen attempt_refuse_countbyweek = total(a) if attempt_refuse == 1
+bys admission_date_week: gen attempt_refuse_per = round(attempt_refuse_countbyweek*100/num_attempt, .01)
+
+bys subject_age: egen attempt_refuse_perbyage = total(attempt_refuse)
+bys subject_age: egen attempt_refuse_perbyage1 = total(attempted_interview)
+gen attempt_refuse_perbyage2 = attempt_refuse_perbyage/attempt_refuse_perbyage1
+drop attempt_refuse_perbyage attempt_refuse_perbyage1
+rename attempt_refuse_perbyage2 attempt_refuse_perbyage
+
+bys admission_date_week: egen attempt_consent_countbyweek = total(a) if attempt_consent == 1
+bys admission_date_week: gen attempt_consent_per = round(attempt_consent_countbyweek*100/num_attempt, .01)
+bys subject_age: egen attempt_consent_perbyage = total(attempt_consent)
+bys subject_age: egen attempt_consent_perbyage1 = total(attempted_interview)
+gen attempt_consent_perbyage2 = attempt_consent_perbyage/attempt_consent_perbyage1
+drop attempt_consent_perbyage attempt_consent_perbyage1
+rename attempt_consent_perbyage2 attempt_consent_perbyage
+
+/****
+attempt_refuse_perbyage		refusal percentages by age given attempted 
+attempt_consent_perbyage	consent percentages by age given attempted
+attempt_refuse				dummy = 1 if attempted and refused 
+attempt_consent				dummy = 1 if attempted and consented 
+proxy_perbyage				percentages by age that have a proxy
+has_proxy 					dummy = 1 if have proxy 
+interview_per_frac			attempted and interviewed fractioned by attempt category and age 	
+countattemptproxy_byage 	number of attempts with a proxy by age 
+countproxy_byage 			number of proxies per age 
+attemptwithproxy 			dummy = 1 if attempted with a proxy 
+attemptproxy_perbyage		attempts with proxies by percentages by age of those interviewed 
+xattemptproxy_perbyage		attempts with proxies by percentages by age of total population
+*****/
+
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Sorted Data", replace
+
+use "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Sorted Data
+
+bys age_group: egen agecount = count(a)
+replace agecount = round(agecount/10)
+keep if attempted_interview == 1
+bsample agecount, strata(age_group)
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\SampleUnbiased", replace
+
+clear
+use "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Sorted Data
+bsample 6334 if attempted_interview == 1
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\SampleBiased", replace
+
+*************************
+set varabbrev off, perm
+
+use "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Sorted Data
+
+#delimit ;
+keep subject subject_mrn subject_age attempted_percent admission_date_week lastweek num_attempt_per attempted_interview consented_interview ismale_gender_dummy weekly_attempt_rate
+attempt_category rounded_attempt_percentage rounded_attempt_percentage5 attempt_percentage_byweek attempt_percentage_byweek5 staytime last_date_week
+geriatric years_post_65 age_group new_admissions new_admissions_rounded interview_per xinterview_per xattempt_per attempt_per_frac
+age_group_attempt_rate subject_gender study_status1 attempt_refuse_perbyage attempt_consent_perbyage attempt_refuse attempt_consent proxy_perbyage has_proxy interview_per_frac
+countattemptproxy_byage countproxy_byage attemptwithproxy attemptproxy_perbyage xattemptproxy_perbyage ;
+**
+gen dummy_20 = 1 if age_group == 20
+replace dummy_20 = 0 if missing(dummy_20)
+gen dummy_30 = 1 if age_group == 30
+replace dummy_30 = 0 if missing(dummy_30)
+gen dummy_40 = 1 if age_group == 40
+replace dummy_40 = 0 if missing(dummy_40)
+gen dummy_50 = 1 if age_group == 50
+replace dummy_50 = 0 if missing(dummy_50)
+gen dummy_60 = 1 if age_group == 60
+replace dummy_60 = 0 if missing(dummy_60)
+gen dummy_70 = 1 if age_group == 70
+replace dummy_70 = 0 if missing(dummy_70)
+gen dummy_80 = 1 if age_group == 80
+replace dummy_80 = 0 if missing(dummy_80)
+gen dummy_90 = 1 if age_group == 90
+replace dummy_90 = 0 if missing(dummy_90)
+gen dummy_100 = 1 if age_group == 100
+replace dummy_100 = 0 if missing(dummy_100)
+
+save "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Sorted Reduced", replace
+//manual entry - run this line again if only running this section
+
+
+//Analysis Begins
+clear
+use "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Sorted Data", replace
+log using "\\prfs.cri.uchicago.edu\meltzer-lab\HospMed\bigLAF analysis 8_2019\Data Quality Study\Data Quality Study Initial Results.smcl", replace
+
+//SUMMARIZING DATA 
+*****************************************************************
+*****************************************************************
+
+
+//GENERAL STATISTICS 
+*****************************************************************
+*****************************************************************
+
+
+//Total number of patients and encounters
+//GENERATION: First level variable 
+***********************************
+unique subject_mrn
+
+//Subject identifiers
+//GENERATION: First level variable 
+***********************************
+summarize subject
+
+//Subject gender
+//GENERATION: First level variable 
+***********************************
+tab subject_gender
+
+//Categorizes weeks into 10 categories
+//ranging from 0-10% attempted interview rate(1) to 90-100% attempted interview rate (10) 
+//GENERATION
+//bys admission_date_week: egen num_attempt = total(a) if !missing(consentintime)
+//bys admission_date_week: gen num_attempt_per = round(num_attempt*100/num_total_week, .01)
+//egen weekly_attempt_rate = max(num_attempt_per), by(admission_date_week) 
+//      Making sure every observation has the weekly interview rate
+//gen attempt_category = ceil(weekly_attempt_rate/10)
+***********************************
+tab attempt_category
+
+//Status of encounters 
+//GENERATION:
+//encode study_status, gen(study_status1)
+//recode study_status1 (1 6 = 1) (2 3 7 = 2) (9 8 = 9)
+***********************************
+tab study_status1
+bys attempt_category: tab study_status1
+
+//Number of weeks with different percentages of interviews 
+//(percentages rounded to nearest 1%)
+//GENERATION
+//gen rounded_attempt_percentage = round(weekly_attempt_rate)
+//by admission_date_week, sort: gen nvals = _n == 1
+//gen attempt_percentage_byweek = rounded_attempt_percentage if nvals == 1
+***********************************
+tab attempt_percentage_byweek
+summarize attempt_percentage_byweek
+
+//Number of weeks with different percentages of interviews 
+//(percentages rounded to nearest 5%, smoother)
+//GENERATION
+//gen rounded_attempt_percentage5 = round(weekly_attempt_rate, 5)
+//by admission_date_week, sort: gen nvals = _n == 1
+//gen attempt_percentage_byweek5 = rounded_attempt_percentage5 if nvals == 1
+***********************************
+tab attempt_percentage_byweek5 
+summarize attempt_percentage_byweek5
+
+//Overall percentage of eligible patients interviewed by age group 
+//GENERATION
+//bys subject_age: egen attempted_percent = total(attempted_interview)
+//bys subject_age: egen attempt_per1 = total(a)
+//gen attempt_per2 = attempted_percent/attempt_per1
+//drop attempted_percent attempt_per1
+//rename attempt_per2 attempted_percent
+***********************************
+summarize attempted_percent
+
+//Overall percentage of eligible patients interviewed by age group
+//fractioned by attempt_category (the rough interview rate in a given week)
+//GENERATION
+//bys subject_age attempt_category: egen attempt_per_frac = total(attempted_interview)
+//bys subject_age attempt_category: egen attempt_per_frac1 = total(a)
+//gen attempt_per_frac2 = attempt_per_frac/attempt_per_frac1
+//drop attempt_per_frac attempt_per_frac1
+//rename attempt_per_frac2 attempt_per_frac
+***********************************
+summarize attempt_per_frac
+
+
+
+//DEPENDENT VARIABLES 
+*****************************************************************
+*****************************************************************
+
+//Bernoulli variable. 1 if an interview was attempted (Time of attempt present), 0 if not
+//Primary Regressand
+//GENERATION
+//gen attempted_interview = !missing(consentintime)
+***********************************
+tab attempted_interview 
+summarize attempted_interview
+
+//Bernoulli variable. 1 if consented for interview, 0 if not
+//GENERATION
+//gen consented_interview = 1 if study_status1 == 1
+//replace consented_interview = 0 if missing(consented_interview)
+***********************************
+tab consented_interview
+summarize consented_interview
+
+//Note alternative: 
+//gen attempted_interview1 = 1 if study_status1 == 1 | 4 | 9
+//replace attempted_interview1 = 0 if study_status1 == 2
+tab attempted_interview1 
+summarize attempted_interview1
+
+tab study_status1 if attempted_interview == 0
+tab study_status1 if attempted_interview == 1
+tab study_status1
+
+//INDEPENDENT VARIABLES: DUMMY VARIABLES  
+*****************************************************************
+*****************************************************************
+
+//Dummy that is 1 when patient is >=65
+//GENERATION
+//gen geriatric = 1 if subject_age >= 65
+//replace geriatric = 0 if subject_age <65
+***********************************
+tab geriatric
+summarize geriatric
+
+//Dummy that is 1 when patient is male
+//GENERATION
+//encode gender, gen(gender1)
+//gen ismale_gender_dummy = gender1-1
+***********************************
+tab ismale_gender_dummy
+summarize ismale_gender_dummy
+
+
+
+
+//INDEPENDENT VARIABLES: CATEGORICAL / CONTINUOUS  VARIABLES  
+*****************************************************************
+*****************************************************************
+
+//For every encounter, the percentage of available interviews
+//attempted that week rounded to the nearest % or 5%
+//GENERATION
+//gen rounded_attempt_percentage = round(weekly_attempt_rate)
+//gen rounded_attempt_percentage5 = round(weekly_attempt_rate, 5)
+***********************************
+tab rounded_attempt_percentage
+summarize rounded_attempt_percentage
+tab rounded_attempt_percentage5
+summarize rounded_attempt_percentage5
+
+//For every encounter, the percentage of available interviews 
+//attempted that week, with high percision
+//GENERATION
+//bys admission_date_week: egen num_attempt = total(a) if !missing(consentintime)
+//bys admission_date_week: gen num_attempt_per = round(num_attempt*100/num_total_week, .01)
+//egen weekly_attempt_rate = max(num_attempt_per), by(admission_date_week) 
+***********************************
+summarize weekly_attempt_rate
+
+//Number of years older than 65 a patient is; 0 if <65
+//GENERATION
+//gen years_post_65 = subject_age-65 if subject_age >= 65
+//replace years_post_65  = 0 if subject_age <65
+***********************************
+tab years_post_65
+summarize years_post_65
+
+//Number of years older than 59 (The mean patient age) a patient is; 0 if <59
+//GENERATION
+//gen years_post_avg59 = subject_age-59 if subject_age >= 59
+//replace years_post_avg59  = 0 if subject_age <59
+***********************************
+tab years_post_avg59
+summarize years_post_avg59
+
+//Patient age in years
+//GENERATION: First level variable
+***********************************
+tab subject_age
+summarize subject_age
+
+//Patient age rounded to the nearest 10 
+//GENERATION
+//gen age_group = round(subject_age, 10)
+***********************************
+tab age_group
+
+//Length of patient stay in days
+//GENERATION
+//gen lastday = dofc(dischargedate)
+//replace lastday = today if missing(lastday)
+//format %td lastday
+//gen staytime = lastday-admitday
+***********************************
+tab staytime 
+summarize staytime
+
+//Number of new admissions in the week prior
+//GENERATION
+//gen admission_date_week = wofd(admitday)
+//format admission_date_week %twY!ww
+//gen lastweek = admission_date_week-1
+//bys lastweek: egen new_admissions = total(a)
+***********************************
+tab new_admissions
+
+//New admissions rounded to the nearest 50
+//GENERATION
+//gen new_admissions_rounded = round(new_admissions, 50)
+***********************************
+tab new_admissions_rounded
+
+
+//Interview rates broken down by age group and attempt category
+//GENERATION
+//bys age_group attempt_category: egen age_group_attempt_rate1 = total(attempted_interview)
+//bys age_group attempt_category: egen age_group_attempt_rate2 = total(a)
+//gen age_group_attempt_rate = age_group_attempt_rate1/age_group_attempt_rate2
+***********************************
+bys attempt_category: tab age_group_attempt_rate 
+
+
+log close 
+
+
