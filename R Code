@@ -1,0 +1,154 @@
+---
+title: "Data Quality Study"
+author: "Edward Zhou"
+date: "November 14, 2019"
+output: html_document
+fig_width:  4
+fig_height:  2.75
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(BayesFactor)
+library(here)
+library(haven)
+library(expss)
+library(ggthemes)
+library(dplyr)
+library(ggplot2)
+library(lindia)
+library(MASS)
+library(RColorBrewer) 
+
+```
+
+## R Markdown
+
+```{r}
+setwd("\\\\prfs.cri.uchicago.edu/meltzer-lab/HospMed/bigLAF analysis 8_2019/Data Quality Study")
+dt <- read_dta("Sorted Reduced.dta")
+
+dt$study_status1[dt$study_status1 == 1] <- 1
+dt$study_status1[dt$study_status1 == 2] <- 2
+dt$study_status1[dt$study_status1 == 4] <- 3
+dt$study_status1[dt$study_status1 == 9] <- 4
+
+val_lab(dt$study_status1) = num_lab("
+             1 Consent
+             2 DCB4    
+             3 DK  
+             4 Refused
+")
+
+```
+
+
+
+```{r}
+ggplot(data = dt) + aes(x = subject_age, y = attempted_percent) + geom_point() + xlab("Age") + ylab("Percentage of age attmepted") + ggtitle("Attempt rates by Age")
+ggplot(data = dt) + aes(x = age_group, y = xattempt_per) + geom_point() + xlab("Age Group") + ylab("Percentage of age group attmepted")
+ggplot(data = dt) + aes(x = subject_age, y = interview_per) + geom_point() + xlab("Age") + ylab("Percentage of age interviewed")
+ggplot(data = dt) + aes(x = age_group, y = xinterview_per) + geom_point() + xlab("Age Group") + ylab("Percentage of age group interviewed")
+
+ggplot(data = dt) + aes(x = subject_age, y = attempt_refuse_perbyage) + geom_point() + xlab("Age Group") + ylab("Percentage of age group attempted and refused")
+
+ggplot(data = dt) + aes(x = subject_age, y = attempt_consent_perbyage) + geom_point() + xlab("Age Group") + ylab("Percentage of age group attempted and consented")
+
+ggplot(data = dt) + aes(x = subject_age, y = proxy_perbyage) + geom_point() + xlab("Age Group") + ylab("Percentage of age group with proxy")
+
+ggplot(data = dt) + aes(x = subject_age, y = attempt_per_frac) + geom_point(alpha = 0.01) + facet_wrap(~attempt_category) + xlab("Age") + ylab("Percentage of age group attmepted")
+
+ggplot(data = dt) + aes(x = subject_age, y = interview_per_frac) + geom_point(alpha = 0.01) + facet_wrap(~attempt_category) + xlab("Age") + ylab("Percentage of age group interviewed")
+
+ggplot() +
+      # blue plot
+      geom_point(data=dt, aes(x=subject_age, y=attempted_percent, color = "attempted_percent"), color="blue") + 
+      geom_smooth(data=dt, aes(x=subject_age, y=attempted_percent), fill="blue",
+        colour="darkblue", size=1) +
+      # red plot
+      geom_point(data=dt, aes(x=subject_age, y=interview_per), color= "red") + 
+      geom_smooth(data=dt, aes(x=subject_age, y=interview_per), fill="darkred",
+        colour="red", size=1) + xlab("Age") + ylab("Percentage of age attmepted or interviewed") + ggtitle("Age vs Survey Chance") 
+  
+
+ggplot(data = dt) + aes(x = new_admissions, y = rounded_attempt_percentage) + geom_point() + ylab("Percentage of patient body attempted") + xlab("Admissions in prior week") + ggtitle("Prior Week Admisisons vs. Interview Rate")
+
+ggplot(data = dt) + aes(x = attempt_category, y = age_group_attempt_rate) + geom_point() + facet_wrap(~age_group) + ylab("Percentage of age group attempted") + xlab("Attempt Category for Week") + ggtitle("Overall Interview Rate vs Age Group Interview Rate") +  geom_smooth(method = "lm")
+
+
+ggplot(data = dt) + aes(x = subject_age, y = attempted_percent) + geom_point() + facet_wrap(~new_admissions_rounded) + ylab("Percentage of age attempted") + xlab("Age") + ggtitle("Interview Age Distribution by Rounded New Admissions")
+
+
+##NOTE: ALL PROXY COUNTS ARE TAKEN FROM THE VARIABLE THAT EXPLAINS
+## WHO CONSENTED THE PATIENT. 
+ggplot(data = dt) + aes(x = subject_age, y = proxy_perbyage) + geom_point() + xlab("Age") + ylab("Percentage of age with a proxy")
+
+ggplot(data = dt) + aes(x = subject_age, y = attemptproxy_perbyage) + geom_point() + xlab("Age") + ylab("Attempts with proxies: percentages by age of attempted")
+
+ggplot(data = dt) + aes(x = subject_age, y = xattemptproxy_perbyage) + geom_point() + xlab("Age") + ylab("Attempts with proxies: percentages by age of total pop")
+
+ggplot(data = dt) + aes(x = subject_age, y = countattemptproxy_byage) + geom_point() + xlab("Age") + ylab("Number of attempts with a proxy by age ")
+
+ggplot(data = dt) + aes(x = subject_age, y = countproxy_byage) + geom_point() + xlab("Age") + ylab("Count by age with a proxy - total pt population")
+
+ggplot() +
+      # blue plot
+      geom_point(data=dt, aes(x=subject_age, y=proxy_perbyage), color="blue") + 
+      geom_smooth(data=dt, aes(x=subject_age, y=proxy_perbyage), fill="blue",
+        colour="darkblue", size=1) +
+      # red plot
+      geom_point(data=dt, aes(x=subject_age, y=attemptproxy_perbyage), color= "red") + 
+      geom_smooth(data=dt, aes(x=subject_age, y=attemptproxy_perbyage), fill="darkred",
+        colour="red", size=1) + xlab("Age") + ylab("Percentage of population with Proxy vs Percentage of Attempts with Proxy") + ggtitle("Proxies in Population and Attempted") 
+  
+```
+
+
+
+Regressions
+```{r}
+m1 <- lm(attempted_interview ~ subject_age, data = dt)
+summary(m1)
+AIC(m1)
+
+gg_resfitted(lm(attempted_interview ~ subject_age, data = dt)) + geom_smooth()
+
+m1 <- lm(attempted_interview ~ staytime, data = dt)
+summary(m1)
+
+
+m2 <- lm(attempted_interview ~ years_post_65, data = dt)
+summary(m2)
+AIC(m2)
+
+gg_resfitted(lm(attempted_interview ~ years_post_65, data = dt)) + geom_smooth()
+
+m3 <- lm(attempted_interview ~ dummy_30 + dummy_40 + dummy_50 + dummy_60 + dummy_70 + dummy_80 + dummy_90 + dummy_100, data = dt)
+summary(m3)
+AIC(m3)
+
+m4 <- lm(attempted_interview ~ dummy_30 + dummy_40 + dummy_50 + dummy_60 + dummy_70 + dummy_80 + dummy_90 + dummy_100 + ismale_gender_dummy + staytime + new_admissions, data = dt)
+summary(m4)
+myaic <- AIC(m4)
+print('The AIC is:')
+print(myaic)
+
+gg_resfitted(lm(attempted_interview ~ dummy_30 + dummy_40 + dummy_50 + dummy_60 + dummy_70 + dummy_80 + dummy_90 + dummy_100 + ismale_gender_dummy + staytime + new_admissions, data = dt)) + geom_smooth()
+
+glm1 <- glm(formula = attempted_interview ~ subject_age, family = "binomial" 	(link = "logit"), data = dt)
+summary(glm1)
+
+glm1 <- glm(formula = attempted_interview ~ dummy_30 + dummy_40 + dummy_50 + dummy_60 + dummy_70 + dummy_80 + dummy_90 + dummy_100 + ismale_gender_dummy + staytime + new_admissions, family = "binomial" 	(link = "logit"), data = dt)
+summary(glm1)
+
+glm2 <- glm(formula = attempted_interview ~ years_post_65 + ismale_gender_dummy + staytime + new_admissions, family = "binomial" 	(link = "logit"), data = dt)
+summary(glm2)
+
+glm3 <- glm(formula = attempted_interview ~ subject_age + ismale_gender_dummy + staytime + new_admissions, family = "binomial" 	(link = "logit"), data = dt)
+summary(glm3)
+```
+
+
+
+
